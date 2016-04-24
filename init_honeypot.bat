@@ -12,28 +12,23 @@ set VAGRANT_FILE_PATH=%VM_DIR%\Vagrantfile
 set VAGRANT_METADATA_DIR=%VM_DIR%\.vagrant
 set VAGRANT_SNAPSHOTS_DIR=%VM_DIR%\snapshots
 
-echo Creating directory for Honeypot virtual machine definition:
-echo %VM_DIR%
+echo Creating directory for Honeypot virtual machine definition: %VM_DIR%
 mkdir %VM_DIR%
 
-REM --- Is vagrant installed?
-
+::--- Check vagrant installed
 WHERE vagrant >nul 2>&1
 if %ERRORLEVEL% NEQ 0 (
 	echo Vagrant is not installed. 1>&2
-	goto END
+	exit /b 1
 )
 
-REM --- Check if VM was already created
+::--- Check if VM was already created
 if exist %VAGRANT_METADATA_DIR% (
-	echo Directory %VAGRANT_METADATA_DIR% already exists.
-	echo Delete 
+	echo Honeypot is already created. To create new honeypot, run "delete_honeypot.bat" first.
+	exit /b 2
 )
 
-REM --- Create vagrant box
-
-echo Creating definition for Honeypot
-
+::--- Create vagrant VM definition
 (
 	echo Vagrant.configure^(2^) do ^|config^|
 	echo   config.vm.box = "hashicorp/precise32"
@@ -42,7 +37,7 @@ echo Creating definition for Honeypot
 	echo   config.vm.provider "virtualbox" do ^|vb^|
 	echo     vb.gui = true
 	echo     vb.linked_clone = true
-	echo     vb.customize ["modifyvm", :id, "--snapshotfolder", "E:/HoneypotTests/honeypot_vm2/snapshots"]
+	echo     vb.customize ["modifyvm", :id, "--snapshotfolder", "%VAGRANT_SNAPSHOTS_DIR%"]
 	echo   end
 	echo   config.vm.provision "shell", 
 	echo     inline: "wget https://apt.puppetlabs.com/puppetlabs-release-precise.deb;
@@ -57,4 +52,8 @@ echo Creating definition for Honeypot
 	echo end
 )>%VAGRANT_FILE_PATH%
 
-:END
+echo Definition for Honeypot created
+
+::-------------------------------------
+::-- FUNCTIONS SECTION
+::-------------------------------------
