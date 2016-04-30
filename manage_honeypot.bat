@@ -82,7 +82,8 @@ if exist %VAGRANT_METADATA_DIR% (
 	echo     vb.customize ["modifyvm", :id, "--snapshotfolder", "%VAGRANT_SNAPSHOTS_DIR%"]
 	echo   end
 	echo   config.vm.provision "shell", 
-	echo     inline: "wget https://apt.puppetlabs.com/puppetlabs-release-precise.deb;
+	echo     inline: "sudo apt-get install whois;
+	echo             wget https://apt.puppetlabs.com/puppetlabs-release-precise.deb;
 	echo             sudo dpkg -i puppetlabs-release-precise.deb;
 	echo             mkdir -p /etc/puppet/modules;
 	echo             puppet module install puppetlabs-apache;
@@ -99,21 +100,15 @@ if exist %VAGRANT_METADATA_DIR% (
 	rem echo 	command => '/usr/bin/apt-get update'
 	rem echo }
 	echo.
-	echo package { 'whois':
-	echo 	ensure =^> installed,
-	echo }
-	echo.
 	echo group { 'management':
 	echo 	ensure	=^> present,
 	echo }
 	echo.
 	echo user { 'management':
-	echo 	require	=^> Package['whois'],
 	echo 	ensure	=^> present,
 	echo 	groups	=^> 'management',
 	echo 	shell	=^> '/bin/bash',
-	echo 	password	=^> generate^("mkpasswd -m sha-512 %MANAGEMENT_PASSWORD% | tr -d '\n'"^),
-	rem echo 	password	=^> generate^('/bin/sh', '-c', "mkpasswd -m sha-512 %MANAGEMENT_PASSWORD% | tr -d '\n'"^),
+	echo 	password	=^> generate^('/bin/bash', '-c', "mkpasswd -m sha-512 %MANAGEMENT_PASSWORD% | tr -d '\n'"^),
 	echo 	home	=^> '/home/management',
 	echo 	managehome	=^> true
 	echo }
