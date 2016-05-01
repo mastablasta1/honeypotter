@@ -1,17 +1,23 @@
 @echo off
-setlocal EnableDelayedExpansion
 
 ::--- Parameters
-set MANAGEMENT_PASSWORD=management
+
+set MANAGEMENT_ACCOUNT_PASSWORD=management
+set WEBSERVER_PUBLIC_DOMAIN=blog.honeypotter.org
+set PUBLIC_IP_ADDRESS=192.168.12.21
 set HONEYPOT_HOSTNAME=webserver
-set VM_DIR_NAME=honeypot_data
-set VAGRANT_BOX=ubuntu/trusty64
-::set VAGRANT_BOX=puppetlabs/ubuntu-14.04-64-puppet
+
 ::--- End of parameters
 
+
+:: =============== INTERNALS, DO NOT MODIFY ====================
+setlocal EnableDelayedExpansion
+
 set ERRORLEVEL=
+set VAGRANT_BOX=ubuntu/trusty64
 set ROOT_DIR=%~dp0
 set ROOT_DIR=%ROOT_DIR:~0,-1%
+set VM_DIR_NAME=honeypot_data
 set VM_DIR=%ROOT_DIR%\%VM_DIR_NAME%
 set VAGRANT_FILE_PATH=%VM_DIR%\Vagrantfile
 set VAGRANT_METADATA_DIR=%VM_DIR%\.vagrant
@@ -31,15 +37,15 @@ if [%1]==[] (
 
 ::--- Check if vagrant is installed
 WHERE vagrant >nul 2>&1
-if %ERRORLEVEL% NEQ 0 (
+if !ERRORLEVEL! NEQ 0 (
 	echo Vagrant is not installed. Aborting... 1>&2
 	exit /b 1
 )
 
 if "%1"=="help" ( 
 	call :help
-) else if "%1"=="create" ( 
-	call :create
+) else if "%1"=="configure" ( 
+	call :configure
 ) else if "%1"=="destroy" ( 
 	call :destroy
 ) else if "%1"=="start" ( 
@@ -49,15 +55,15 @@ if "%1"=="help" (
 	echo No such command. Try '%~n0 help'.
 )
 
-exit /b %ERRORLEVEL%
+exit /b !ERRORLEVEL!
 
 ::-------------------------------------
 ::-- FUNCTIONS SECTION
 ::-------------------------------------
 
 
-::-- CREATE HONEYPOT FUNCTION ---------
-:create
+::-- CONFIGURE HONEYPOT FUNCTION ---------
+:configure
 
 mkdir %VM_DIR%
 if errorlevel 1 exit /b !ERRORLEVEL!
@@ -68,7 +74,7 @@ if errorlevel 1 exit /b !ERRORLEVEL!
 
 ::--- Check if VM was already created
 if exist %VAGRANT_METADATA_DIR% (
-	echo Honeypot was already created. To create new honeypot, run "delete" command first.
+	echo Honeypot was already configured in this directory. To create new honeypot, run "destroy" command first.
 	exit /b 2
 )
 
@@ -79,7 +85,7 @@ if exist %VAGRANT_METADATA_DIR% (
 	echo   config.vm.box = "%VAGRANT_BOX%"
 	echo   config.vm.hostname = "%HONEYPOT_HOSTNAME%"
 	echo   config.vm.network "forwarded_port", guest: 80, host: 8080
-	echo   config.vm.network "private_network", ip: "192.168.23.32"
+	echo   config.vm.network "private_network", ip: "%PUBLIC_IP_ADDRESS%"
 	echo   config.vm.provider "virtualbox" do ^|vb^|
 	echo     vb.gui = true
 	rem echo     vb.linked_clone = true
@@ -114,33 +120,39 @@ if exist %VAGRANT_METADATA_DIR% (
 	echo user { 'management':
 	echo 	require	=^> Group['management'],
 	echo 	ensure	=^> present,
-	echo 	groups	=^> 'management',
+	echo 	groups	=^> ['management','sudo'],
 	echo 	shell	=^> '/bin/bash',
-	echo 	password	=^> generate^('/bin/bash', '-c', "mkpasswd -m sha-512 %MANAGEMENT_PASSWORD% | tr -d '\n'"^),
+	echo 	password	=^> generate^('/bin/bash', '-c', "mkpasswd -m sha-512 %MANAGEMENT_ACCOUNT_PASSWORD% | tr -d '\n'"^),
 	echo 	home	=^> '/home/management',
 	echo 	managehome	=^> true
 	echo }
 	echo class { 'apache':
 	echo 	default_vhost	=^> false,
+	echo 	mpm_module	=^> 'prefork',
 	echo }
-	echo apache::vhost { 'wordpress':
+	echo class {'apache::mod::php': }
+	echo apache::vhost { '%WEBSERVER_PUBLIC_DOMAIN%':
+	echo 	ip	=^> '%PUBLIC_IP_ADDRESS%',	
 	echo 	port	=^> '80',
-	echo 	docroot	=^> '/var/www',
+	echo 	docroot	=^> '/var/www/blog',
+	echo }
+	echo class { 'mysql::server':
+	echo 	root_password	=^> 'management',
 	echo }
 ) >%PUPPET_MANIFESTS_FILE%
 
 echo Created honeypot definition in: %VM_DIR%
 exit /b 0
-::--- END OF CREATE HONEYPOT FUNCTION
+::--- END OF CONFIGURE HONEYPOT FUNCTION
 
 ::--- HELP FUNCTION
 :help
 echo Available commands:
-echo 	create	creates a definition of honeypot in the location of this script
+echo 	configure	creates a configuration of honeypot which is then used in start/stop commands
 echo.
-echo 	destroy	shuts down honeypot and deletes its definition and VM data
+echo 	destroy	shuts down honeypot and deletes its configuration and VM data
 echo.
-echo 	start	starts a honeypot (virtual machine on VirtualBox). Requires an existing honeypot definition.
+echo 	start	starts a honeypot (virtual machine on VirtualBox). Requires an existing honeypot configuration.
 echo.
 echo 	stop	stops a running honeypot virtual machine.
 echo.
@@ -172,9 +184,9 @@ exit /b 0
 :destroy
 setlocal EnableDelayedExpansion
 if exist %VM_DIR% (
-	set /P ANSWER="Are you sure you want to destroy Honeypot completely? (Y/N) "
+	set /P ANSWER="Are you sure you want to destroy Honeypot completely? (y/N) "
 	if /I "!ANSWER!"=="Y" (
-		echo Proceeding...
+		echo Destroying...
 	) else (
 		exit /b 0
 	)
