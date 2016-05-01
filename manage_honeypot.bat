@@ -3,6 +3,7 @@ setlocal
 
 ::--- Parameters
 set MANAGEMENT_PASSWORD=management
+set HONEYPOT_HOSTNAME=webserver
 set VM_DIR_NAME=honeypot_data
 set VAGRANT_BOX=ubuntu/trusty64
 ::set VAGRANT_BOX=puppetlabs/ubuntu-14.04-64-puppet
@@ -74,12 +75,14 @@ if exist %VAGRANT_METADATA_DIR% (
 (
 	echo Vagrant.configure^(2^) do ^|config^|
 	echo   config.vm.box = "%VAGRANT_BOX%"
+	echo   config.vm.hostname = "%HONEYPOT_HOSTNAME%"
 	echo   config.vm.network "forwarded_port", guest: 80, host: 8080
 	echo   config.vm.network "private_network", ip: "192.168.23.32"
 	echo   config.vm.provider "virtualbox" do ^|vb^|
 	echo     vb.gui = true
 	echo     vb.linked_clone = true
 	echo     vb.customize ["modifyvm", :id, "--snapshotfolder", "%VAGRANT_SNAPSHOTS_DIR%"]
+	echo     vb.customize ["modifyvm", :id, "--natdnshostresolver1", "on"]
 	echo   end
 	echo   config.vm.provision "shell", 
 	echo     inline: "sudo apt-get install whois;
@@ -96,21 +99,31 @@ if exist %VAGRANT_METADATA_DIR% (
 ) >%VAGRANT_FILE_PATH%
 
 (
-	rem echo exec { 'apt-update':
-	rem echo 	command => '/usr/bin/apt-get update'
-	rem echo }
-	echo.
+	echo exec { 'apt-update':
+	echo 	command =^> '/usr/bin/apt-get update'
+	echo }
+	echo package { 'htop':
+	echo 	ensure =^> installed,
+	echo 	require =^> Exec['apt-update']
+	echo }
 	echo group { 'management':
 	echo 	ensure	=^> present,
 	echo }
-	echo.
 	echo user { 'management':
+	echo 	require	=^> Group['management'],
 	echo 	ensure	=^> present,
 	echo 	groups	=^> 'management',
 	echo 	shell	=^> '/bin/bash',
 	echo 	password	=^> generate^('/bin/bash', '-c', "mkpasswd -m sha-512 %MANAGEMENT_PASSWORD% | tr -d '\n'"^),
 	echo 	home	=^> '/home/management',
 	echo 	managehome	=^> true
+	echo }
+	echo class { 'apache':
+	echo 	default_vhost	=^> false,
+	echo }
+	echo apache::vhost { 'wordpress':
+	echo 	port	=^> '80',
+	echo 	docroot	=^> '/var/www',
 	echo }
 ) >%PUPPET_MANIFESTS_FILE%
 
@@ -147,19 +160,30 @@ exit /b %ERRORLEVEL%
 
 ::--- STOP HONEYPOT
 :stop
+pushd %VM_DIR%
+vagrant halt
+popd
 exit /b 0
 ::--- END OF STOP HONEYPOT
 
 ::--- DESTROY
 :destroy
+setlocal EnableDelayedExpansion
 if exist %VM_DIR% (
+	set /P ANSWER="Are you sure you want to destroy Honeypot completely? (Y/N) "
+	if /I "!ANSWER!"=="Y" (
+		echo Proceeding...
+	) else (
+		exit /b 0
+	)
+
 	pushd %VM_DIR%
 	vagrant destroy --force
 	popd
 
 	rmdir %VM_DIR% /S /Q
 	if not errorlevel 1 echo Honeypot destroyed.
-	exit /b %ERRORLEVEL%
+	exit /b !ERRORLEVEL!
 )
 echo Honeypot does not exist. Nothing to do.
 exit /b 0
