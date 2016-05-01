@@ -1,5 +1,5 @@
 @echo off
-setlocal
+setlocal EnableDelayedExpansion
 
 ::--- Parameters
 set MANAGEMENT_PASSWORD=management
@@ -60,11 +60,11 @@ exit /b %ERRORLEVEL%
 :create
 
 mkdir %VM_DIR%
-if errorlevel 1 exit /b %ERRORLEVEL%
+if errorlevel 1 exit /b !ERRORLEVEL!
 mkdir %VAGRANT_SNAPSHOTS_DIR%
-if errorlevel 1 exit /b %ERRORLEVEL%
+if errorlevel 1 exit /b !ERRORLEVEL!
 mkdir %PUPPET_MANIFESTS_DIR%
-if errorlevel 1 exit /b %ERRORLEVEL%
+if errorlevel 1 exit /b !ERRORLEVEL!
 
 ::--- Check if VM was already created
 if exist %VAGRANT_METADATA_DIR% (
@@ -74,14 +74,16 @@ if exist %VAGRANT_METADATA_DIR% (
 
 (
 	echo Vagrant.configure^(2^) do ^|config^|
+	echo   config.vm.define "honeypot" do ^|honeypot^|
+	echo   end
 	echo   config.vm.box = "%VAGRANT_BOX%"
 	echo   config.vm.hostname = "%HONEYPOT_HOSTNAME%"
 	echo   config.vm.network "forwarded_port", guest: 80, host: 8080
 	echo   config.vm.network "private_network", ip: "192.168.23.32"
 	echo   config.vm.provider "virtualbox" do ^|vb^|
 	echo     vb.gui = true
-	echo     vb.linked_clone = true
-	echo     vb.customize ["modifyvm", :id, "--snapshotfolder", "%VAGRANT_SNAPSHOTS_DIR%"]
+	rem echo     vb.linked_clone = true
+	echo     vb.customize ["modifyvm", :id, "--snapshotfolder", "%VAGRANT_SNAPSHOTS_DIR:\=/%"]
 	echo     vb.customize ["modifyvm", :id, "--natdnshostresolver1", "on"]
 	echo   end
 	echo   config.vm.provision "shell", 
@@ -151,11 +153,11 @@ exit /b 0
 pushd %VM_DIR%
 vagrant up
 if errorlevel 1 (
-	echo.
-	echo Honeypot start failed.
+	echo. && echo Honeypot start failed.
+	exit /b 1
 )
-popd
-exit /b %ERRORLEVEL%
+vagrant snapshot push
+exit /b 0
 ::--- END OF START HONEYPOT
 
 ::--- STOP HONEYPOT
@@ -188,3 +190,9 @@ if exist %VM_DIR% (
 echo Honeypot does not exist. Nothing to do.
 exit /b 0
 ::--- END OF DESTROY
+
+::--- RESTORE
+:restore
+
+exit /b 0
+::--- END OF RESTORE
