@@ -5,8 +5,8 @@
 set MANAGEMENT_ACCOUNT_PASSWORD=secret
 set WEBSERVER_PUBLIC_DOMAIN=blog.honeypotter.org
 set PUBLIC_IP_ADDRESS=192.168.12.21
-set FORWARDED_SSH_PORT=2244
 set HONEYPOT_HOSTNAME=webserver
+set PUTTY_EXE_PATH="C:\Program Files (x86)\PuTTY\putty.exe"
 
 ::--- End of parameters
 
@@ -22,7 +22,6 @@ set VM_DIR_NAME=honeypot_data
 set VM_DIR=%ROOT_DIR%\%VM_DIR_NAME%
 set VAGRANT_FILE_PATH=%VM_DIR%\Vagrantfile
 set VAGRANT_METADATA_DIR=%VM_DIR%\.vagrant
-rem set VAGRANT_SNAPSHOTS_DIR=%VM_DIR%\snapshots
 set PUPPET_MANIFESTS_DIR=%VM_DIR%\manifests
 set LOGS_DIR_NAME=logs
 set LOGS_DIR=%VM_DIR%\%LOGS_DIR_NAME%
@@ -56,6 +55,8 @@ if "%1"=="help" (
 	call :start
 ) else if "%1"=="stop" ( 
 	call :stop
+) else if "%1"=="ssh" ( 
+	call :ssh
 ) else (
 	set ERRORLEVEL=2
 	echo No such command. Try '%~n0 help'.
@@ -119,7 +120,7 @@ set GUEST_LOGS_DIR=/home/%MANAGEMENT_ACCOUNT_NAME%/%LOGS_DIR_NAME%
 	echo     puppet.manifest_file = "default.pp"
 	echo   end
 	echo   config.vm.provision "post_puppet", type: "shell" do ^|s^|
-	echo     s.inline = "mkdir %GUEST_LOGS_DIR%;
+	echo     s.inline = "mkdir --parents %GUEST_LOGS_DIR%;
 	echo                 chown %MANAGEMENT_ACCOUNT_NAME%:%MANAGEMENT_ACCOUNT_NAME% %GUEST_LOGS_DIR%;
     echo                 mount -t vboxsf -o uid=`id -u %MANAGEMENT_ACCOUNT_NAME%`,gid=`id -g %MANAGEMENT_ACCOUNT_NAME%` %LOGS_DIR_NAME% %GUEST_LOGS_DIR%"
 	echo   end
@@ -176,6 +177,8 @@ echo 	start	starts a honeypot (virtual machine on VirtualBox). Requires an exist
 echo.
 echo 	stop	stops a running honeypot virtual machine.
 echo.
+echo 	ssh	connect to virtual machine with Putty. Correct putty path in script properties is required.
+echo.
 echo 	help	displays this help
 exit /b 0
 ::--- END OF HELP FUNCTION
@@ -183,12 +186,30 @@ exit /b 0
 ::--- START HONEYPOT
 :start
 pushd %VM_DIR%
+
 vagrant up
 if errorlevel 1 (
 	echo. && echo Honeypot start failed.
 	exit /b 1
 )
+
+vagrant reload --provision-with post_puppet
+if errorlevel 1 (
+	echo. && echo Honeypot reload failed. Recreating honeypot is advised.
+	exit /b 2
+)
+
 vagrant snapshot push
+if errorlevel 1 (
+	echo. && echo Honeypot deployed successfully, but saving state failed. You can retry with ""
+	exit /b 3
+)
+
+popd
+echo.
+echo Honeypot is running.
+echo Honeypot's current state has been saved. You can restore it with "restore" command.
+
 exit /b 0
 ::--- END OF START HONEYPOT
 
@@ -203,6 +224,7 @@ exit /b 0
 ::--- DESTROY
 :destroy
 setlocal EnableDelayedExpansion
+
 if exist %VM_DIR% (
 	set /P ANSWER="Are you sure you want to destroy Honeypot completely? (y/N) "
 	if /I "!ANSWER!"=="Y" (
@@ -219,6 +241,7 @@ if exist %VM_DIR% (
 	if not errorlevel 1 echo Honeypot destroyed.
 	exit /b !ERRORLEVEL!
 )
+
 echo Honeypot does not exist. Nothing to do.
 exit /b 0
 ::--- END OF DESTROY
@@ -228,3 +251,14 @@ exit /b 0
 
 exit /b 0
 ::--- END OF RESTORE
+
+::--- SSH
+:ssh
+if not exist %PUTTY_EXE_PATH% (
+	echo Path to Putty is incorrect. Fix path in script properties. Aborting...
+	exit /b 1
+)
+
+start "" %PUTTY_EXE_PATH% localhost 2222
+exit /b 0
+::--- END OF SSH
