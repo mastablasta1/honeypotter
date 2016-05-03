@@ -2,9 +2,10 @@
 
 ::--- Parameters
 
-set MANAGEMENT_ACCOUNT_PASSWORD=management
+set MANAGEMENT_ACCOUNT_PASSWORD=secret
 set WEBSERVER_PUBLIC_DOMAIN=blog.honeypotter.org
 set PUBLIC_IP_ADDRESS=192.168.12.21
+set FORWARDED_SSH_PORT=2222
 set HONEYPOT_HOSTNAME=webserver
 
 ::--- End of parameters
@@ -21,9 +22,12 @@ set VM_DIR_NAME=honeypot_data
 set VM_DIR=%ROOT_DIR%\%VM_DIR_NAME%
 set VAGRANT_FILE_PATH=%VM_DIR%\Vagrantfile
 set VAGRANT_METADATA_DIR=%VM_DIR%\.vagrant
-set VAGRANT_SNAPSHOTS_DIR=%VM_DIR%\snapshots
+rem set VAGRANT_SNAPSHOTS_DIR=%VM_DIR%\snapshots
 set PUPPET_MANIFESTS_DIR=%VM_DIR%\manifests
+set LOGS_DIR_NAME=hp_logs
+set LOGS_DIR=%VM_DIR%\hp_logs
 set PUPPET_MANIFESTS_FILE=%PUPPET_MANIFESTS_DIR%\default.pp
+set MANAGEMENT_ACCOUNT_NAME=management
 
 echo Honeypotter 0.1
 echo.
@@ -50,11 +54,14 @@ if "%1"=="help" (
 	call :destroy
 ) else if "%1"=="start" ( 
 	call :start
+) else if "%1"=="stop" ( 
+	call :stop
 ) else (
 	set ERRORLEVEL=2
 	echo No such command. Try '%~n0 help'.
 )
 
+if errorlevel 1 echo Error number !ERRORLEVEL!
 exit /b !ERRORLEVEL!
 
 ::-------------------------------------
@@ -67,14 +74,16 @@ exit /b !ERRORLEVEL!
 
 mkdir %VM_DIR%
 if errorlevel 1 exit /b !ERRORLEVEL!
-mkdir %VAGRANT_SNAPSHOTS_DIR%
-if errorlevel 1 exit /b !ERRORLEVEL!
 mkdir %PUPPET_MANIFESTS_DIR%
 if errorlevel 1 exit /b !ERRORLEVEL!
+mkdir %LOGS_DIR%
+if errorlevel 1 exit /b !ERRORLEVEL!
+rem mkdir %VAGRANT_SNAPSHOTS_DIR%
+rem if errorlevel 1 exit /b !ERRORLEVEL!
 
 ::--- Check if VM was already created
 if exist %VAGRANT_METADATA_DIR% (
-	echo Honeypot was already configured in this directory. To create new honeypot, run "destroy" command first.
+	echo Honeypot was already configured in this directory. Run "destroy" command first.
 	exit /b 2
 )
 
@@ -84,12 +93,15 @@ if exist %VAGRANT_METADATA_DIR% (
 	echo   end
 	echo   config.vm.box = "%VAGRANT_BOX%"
 	echo   config.vm.hostname = "%HONEYPOT_HOSTNAME%"
+	echo   config.vm.synced_folder ".", "/vagrant", disabled: true
+	rem echo   config.vm.synced_folder "%LOGS_DIR:\=/%/", "/home/%MANAGEMENT_ACCOUNT_NAME%", owner: "%MANAGEMENT_ACCOUNT_NAME%", group: "%MANAGEMENT_ACCOUNT_NAME%"
+	echo   config.vm.network "forwarded_port", guest: 22, host: %FORWARDED_SSH_PORT%
 	echo   config.vm.network "forwarded_port", guest: 80, host: 8080
 	echo   config.vm.network "private_network", ip: "%PUBLIC_IP_ADDRESS%"
 	echo   config.vm.provider "virtualbox" do ^|vb^|
 	echo     vb.gui = true
 	rem echo     vb.linked_clone = true
-	echo     vb.customize ["modifyvm", :id, "--snapshotfolder", "%VAGRANT_SNAPSHOTS_DIR:\=/%"]
+	rem echo     vb.customize ["modifyvm", :id, "--snapshotfolder", "%VAGRANT_SNAPSHOTS_DIR:\=/%"]
 	echo     vb.customize ["modifyvm", :id, "--natdnshostresolver1", "on"]
 	echo   end
 	echo   config.vm.provision "shell", 
@@ -114,16 +126,16 @@ if exist %VAGRANT_METADATA_DIR% (
 	echo 	ensure =^> installed,
 	echo 	require =^> Exec['apt-update']
 	echo }
-	echo group { 'management':
+	echo group { '%MANAGEMENT_ACCOUNT_NAME%':
 	echo 	ensure	=^> present,
 	echo }
-	echo user { 'management':
-	echo 	require	=^> Group['management'],
+	echo user { '%MANAGEMENT_ACCOUNT_NAME%':
+	echo 	require	=^> Group['%MANAGEMENT_ACCOUNT_NAME%'],
 	echo 	ensure	=^> present,
-	echo 	groups	=^> ['management','sudo'],
+	echo 	groups	=^> ['%MANAGEMENT_ACCOUNT_NAME%','sudo'],
 	echo 	shell	=^> '/bin/bash',
 	echo 	password	=^> generate^('/bin/bash', '-c', "mkpasswd -m sha-512 %MANAGEMENT_ACCOUNT_PASSWORD% | tr -d '\n'"^),
-	echo 	home	=^> '/home/management',
+	echo 	home	=^> '/home/%MANAGEMENT_ACCOUNT_NAME%',
 	echo 	managehome	=^> true
 	echo }
 	echo class { 'apache':
