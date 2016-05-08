@@ -91,8 +91,10 @@ if exist %VAGRANT_METADATA_DIR% (
 )
 
 set GUEST_LOGS_DIR=/home/%MANAGEMENT_ACCOUNT_NAME%/%LOGS_DIR_NAME%
-set GUEST_APACHE_LOGS_DIR_DEST=%GUEST_LOGS_DIR%/apache
 set GUEST_APACHE_LOGS_DIR_SRC=/var/log/apache2
+set GUEST_APACHE_LOGS_DIR_DEST=%GUEST_LOGS_DIR%/apache
+set GUEST_MYSQL_LOGS_DIR_SRC=/var/log/mysql
+set GUEST_MYSQL_LOGS_DIR_DEST=%GUEST_LOGS_DIR%/mysql
 
 (
 	echo.Vagrant.configure^(2^) do ^|config^|
@@ -112,11 +114,11 @@ set GUEST_APACHE_LOGS_DIR_SRC=/var/log/apache2
 	echo.  end
 	echo.  config.vm.provision "pre_puppet", type: "shell" do ^|s^|
 	echo.    s.inline = "sudo apt-get install whois;
-	echo.            wget https://apt.puppetlabs.com/puppetlabs-release-precise.deb;
-	echo.            sudo dpkg -i puppetlabs-release-precise.deb;
-	echo.            mkdir -p /etc/puppet/modules;
-	echo.            puppet module install puppetlabs-apache;
-	echo.            puppet module install puppetlabs-mysql"
+	echo.                wget https://apt.puppetlabs.com/puppetlabs-release-trusty.deb;
+	echo.                sudo dpkg -i puppetlabs-release-trusty.deb;
+	echo.                mkdir -p /etc/puppet/modules;
+	echo.                puppet module install puppetlabs-apache;
+	echo.                puppet module install puppetlabs-mysql"
 	echo.  end
 	echo.  config.vm.provision "puppet", type: "puppet" do ^|puppet^|
 	echo.    puppet.manifests_path = "puppet"
@@ -127,10 +129,12 @@ set GUEST_APACHE_LOGS_DIR_SRC=/var/log/apache2
 	echo.    s.inline = "mkdir --parents %GUEST_LOGS_DIR%;
 	echo.                chown %MANAGEMENT_ACCOUNT_NAME%:%MANAGEMENT_ACCOUNT_NAME% %GUEST_LOGS_DIR%;
     echo.                mount -t vboxsf -o uid=`id -u %MANAGEMENT_ACCOUNT_NAME%`,gid=`id -g %MANAGEMENT_ACCOUNT_NAME%` %LOGS_DIR_NAME% %GUEST_LOGS_DIR%;
-	echo.                mkdir --parents %GUEST_APACHE_LOGS_DIR_DEST%;
 	echo.                dos2unix %RSYNCD_GUEST_SCRIPT_PATH%;
 	echo.                chmod u+x %RSYNCD_GUEST_SCRIPT_PATH%;
-	echo.                %RSYNCD_GUEST_SCRIPT_PATH% %GUEST_APACHE_LOGS_DIR_SRC% %GUEST_APACHE_LOGS_DIR_DEST%"
+	echo.                mkdir --parents %GUEST_APACHE_LOGS_DIR_DEST%;
+	echo.                mkdir --parents %GUEST_MYSQL_LOGS_DIR_DEST%;
+	echo.                %RSYNCD_GUEST_SCRIPT_PATH% %GUEST_APACHE_LOGS_DIR_SRC% %GUEST_APACHE_LOGS_DIR_DEST%;
+	echo.                %RSYNCD_GUEST_SCRIPT_PATH% %GUEST_MYSQL_LOGS_DIR_SRC% %GUEST_MYSQL_LOGS_DIR_DEST%"
 	echo.  end
 	echo.end
 ) >%VAGRANT_FILE_PATH%
@@ -177,6 +181,11 @@ set GUEST_APACHE_LOGS_DIR_SRC=/var/log/apache2
 	echo.}
 	echo.class { 'mysql::server':
 	echo.	root_password	=^> 'management',
+	echo.	override_options =^> { 'mysqld' =^> { 
+	echo.		'general_log_file' =^> '/var/log/mysql/mysql_queries.log',
+	echo.		'general_log' =^> 1,
+	echo.		'log_output' =^> 'FILE',
+	echo.	} }
 	echo.}
 	echo.package { 'php5-mysql':
 	echo.	ensure =^> installed,
@@ -192,7 +201,8 @@ set GUEST_APACHE_LOGS_DIR_SRC=/var/log/apache2
 	echo.if ^^! [ -w "$DEST" ]; then echo rsyncd no-dest $DEST; exit 2; fi
 	echo.echo rsyncd start $SRC $DEST
 	echo.rsync -r $SRC $DEST
-	echo.nohup inotifywait -r -m -e modify $SRC ^| while read info; do rsync -r $SRC $DEST; echo rsyncd $info; done ^&
+	echo.nohup inotifywait -r -m -e modify $SRC ^| while read info ; do rsync -r $SRC $DEST ; done ^&
+	echo.sleep 1
 ) >%RSYNCD_HOST_PATH%
 
 echo.Created honeypot definition in: %VM_DIR%
@@ -221,7 +231,7 @@ exit /b 0
 pushd %VM_DIR%
 
 call :_vm_exists
-if not errorlevel 1 set EXISTS=yes
+if not errorlevel 1 set EXISTS=true
 
 vagrant up
 if errorlevel 1 (
@@ -229,28 +239,10 @@ if errorlevel 1 (
 	exit /b 1
 )
 
-if "!EXISTS!"=="yes" goto :_start_end
+if "!EXISTS!"=="true" goto _start_end
 
-:: Honeypot started for the first time
+echo. && echo.Honeypot has been created. VM snapshot will now be created in case you'd like to revert your honeypot to out-of-the-box state.
 
-::if not "%*:--no-reboot="=="%*" (
-::	echo.Skipping reboot after creation...
-::	goto :_start_snapshot
-::) else (
-::	echo.Honeypot will be rebooted to apply new hostname.
-::)
-::vagrant reload
-::if errorlevel 1 (
-::	echo. && echo.Honeypot reload failed. Recreating honeypot is advised.
-::	exit /b 2
-::)
-
-if not "%*:--no-snapshot="=="%*" (
-	echo.Skipping snapshot after creation...
-	goto _start_end
-) else (
-	echo Snapshot of newly created honeypot will be created.
-)
 vagrant snapshot push
 if errorlevel 1 (
 	echo. && echo.Honeypot deployed successfully, but saving state failed. You can retry with ""
@@ -260,7 +252,7 @@ if errorlevel 1 (
 :_start_end
 
 popd
-echo. && echo.Honeypot is running.
+echo. && echo.Honeypot is ready.
 exit /b 0
 ::--- END OF START HONEYPOT
 
