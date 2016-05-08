@@ -3,7 +3,8 @@
 ::--- Parameters
 
 set MANAGEMENT_ACCOUNT_PASSWORD=secret
-set WEBSERVER_PUBLIC_DOMAIN=blog.honeypotter.org
+set MYSQL_ROOT_PASSWORD=secret
+set WEBSERVER_PUBLIC_DOMAIN=blog.example.org
 set PUBLIC_IP_ADDRESS=192.168.12.21
 set HONEYPOT_HOSTNAME=webserver
 set PUTTY_EXE_PATH="C:\Program Files (x86)\PuTTY\putty.exe"
@@ -58,6 +59,10 @@ if "%1"=="help" (
 	call :start %*
 ) else if "%1"=="stop" ( 
 	call :stop %*
+) else if "%1"=="save" ( 
+	call :save %*
+) else if "%1"=="revert" ( 
+	call :revert %*
 ) else if "%1"=="ssh" ( 
 	call :ssh %*
 ) else (
@@ -115,10 +120,11 @@ set GUEST_MYSQL_LOGS_DIR_DEST=%GUEST_LOGS_DIR%/mysql
 	echo.  config.vm.provision "pre_puppet", type: "shell" do ^|s^|
 	echo.    s.inline = "sudo apt-get install whois;
 	echo.                wget https://apt.puppetlabs.com/puppetlabs-release-trusty.deb;
-	echo.                sudo dpkg -i puppetlabs-release-trusty.deb;
+	echo.                dpkg -i puppetlabs-release-trusty.deb;
 	echo.                mkdir -p /etc/puppet/modules;
 	echo.                puppet module install puppetlabs-apache;
-	echo.                puppet module install puppetlabs-mysql"
+	echo.                puppet module install puppetlabs-mysql;
+	echo.                chmod o-rx /home/*"
 	echo.  end
 	echo.  config.vm.provision "puppet", type: "puppet" do ^|puppet^|
 	echo.    puppet.manifests_path = "puppet"
@@ -167,10 +173,13 @@ set GUEST_MYSQL_LOGS_DIR_DEST=%GUEST_LOGS_DIR%/mysql
 	echo.	home	=^> '/home/%MANAGEMENT_ACCOUNT_NAME%',
 	echo.	managehome	=^> true
 	echo.}
+	echo.user { 'vagrant':
+	echo.	password =^> '*'
+	echo.}
 	echo.class { 'apache':
-	echo.	default_vhost	=^> false,
-	echo.	mpm_module	=^> 'prefork',
-	echo.	log_level	=^> 'info',
+	echo.	default_vhost =^> false,
+	echo.	mpm_module =^> 'prefork',
+	echo.	log_level =^> 'info',
 	echo.}
 	echo.class {'apache::mod::php': }
 	echo.apache::vhost { '%WEBSERVER_PUBLIC_DOMAIN%':
@@ -180,16 +189,20 @@ set GUEST_MYSQL_LOGS_DIR_DEST=%GUEST_LOGS_DIR%/mysql
 	echo.	access_log_format =^> 'combined',
 	echo.}
 	echo.class { 'mysql::server':
-	echo.	root_password	=^> 'management',
+	echo.	root_password	=^> '%MYSQL_ROOT_PASSWORD%',
 	echo.	override_options =^> { 'mysqld' =^> { 
 	echo.		'general_log_file' =^> '/var/log/mysql/mysql_queries.log',
 	echo.		'general_log' =^> 1,
-	echo.		'log_output' =^> 'FILE',
+	echo.		'log_output' =^> 'FILE'
 	echo.	} }
 	echo.}
 	echo.package { 'php5-mysql':
 	echo.	ensure =^> installed,
-	echo.	require =^> Class['mysql::server'],
+	echo.	require =^> Class['mysql::server']
+	echo.}
+	echo.exec { 'mysql-restart':
+	echo.	require =^> Package['php5-mysql'],
+	echo.	command =^> '/usr/sbin/service mysql restart'
 	echo.}
 ) >%PUPPET_MANIFESTS_FILE%
 
@@ -197,11 +210,20 @@ set GUEST_MYSQL_LOGS_DIR_DEST=%GUEST_LOGS_DIR%/mysql
 	echo.#!/bin/bash
 	echo.SRC="$1"
 	echo.DEST="$2"
+	echo.PID_FILE=$DEST/.rsyncd
 	echo.if ^^! [ -r "$SRC" ]; then echo rsyncd no-src $SRC; exit 1; fi
 	echo.if ^^! [ -w "$DEST" ]; then echo rsyncd no-dest $DEST; exit 2; fi
+	echo.if [ -e "$PID_FILE" ]; then
+	echo.	EPID=`cat $PID_FILE`
+	echo.	if ps -p $EPID ^> /dev/null; then
+	echo.		echo rsyncd already-running $EPID
+	echo.		exit 0
+	echo.	fi
+	echo.fi
 	echo.echo rsyncd start $SRC $DEST
 	echo.rsync -r $SRC $DEST
 	echo.nohup inotifywait -r -m -e modify $SRC ^| while read info ; do rsync -r $SRC $DEST ; done ^&
+	echo.echo $^^! ^> $PID_FILE
 	echo.sleep 1
 ) >%RSYNCD_HOST_PATH%
 
@@ -212,17 +234,21 @@ exit /b 0
 ::--- HELP FUNCTION
 :help
 echo.Available commands:
-echo.	configure	creates a configuration of honeypot which is then used in start/stop commands
+echo.	configure	- creates a configuration of honeypot which is then used in start/stop commands.
 echo.
-echo.	destroy	shuts down honeypot and deletes its configuration and VM data
+echo.	destroy		- shuts down honeypot and deletes its configuration and VM data.
 echo.
-echo.	start	starts a honeypot (virtual machine on VirtualBox). Requires an existing honeypot configuration.
+echo.	start	- starts a honeypot (virtual machine on VirtualBox). Requires an existing honeypot configuration.
 echo.
-echo.	stop	stops a running honeypot virtual machine.
+echo.	stop	- stops honeypot virtual machine.
 echo.
-echo.	ssh	connect to virtual machine with Putty. Correct putty path in script properties is required.
+echo.	save	- saves current state of honeypot (uses "vagrant snapshot push").
 echo.
-echo.	help	displays this help
+echo.	revert	- restores honeypot to latest saved state (uses "vagrant snapshot pop").
+echo.
+echo.	ssh	- connect to virtual machine with Putty. Correct putty path in script properties is required.
+echo.
+echo.	help	- displays this help.
 exit /b 0
 ::--- END OF HELP FUNCTION
 
@@ -275,25 +301,47 @@ if not exist %VM_DIR% (
 
 set /P ANSWER="Are you sure you want to destroy Honeypot completely? Configuration will also be deleted. (y/N) "
 if /I "!ANSWER!"=="Y" (
-	echo.Destroying...
+	echo.
 ) else (
 	exit /b 0
 )
 
+if not exist %VAGRANT_METADATA_DIR% goto _destroy_remove_data
+
+echo.Destroying honeypot VM...
 pushd %VM_DIR%
 vagrant destroy --force
 popd
+timeout /t 3 /nobreak > NUL
 
+:_destroy_remove_data
+
+echo.Removing configuration...
 rmdir %VM_DIR% /S /Q
 if not errorlevel 1 echo.Honeypot destroyed.
 exit /b !ERRORLEVEL!
 ::--- END OF DESTROY
 
-::--- RESTORE
-:restore
+::--- REVERT
+:revert
+echo.Attempting revert to previously saved state...
+pushd %VM_DIR%
+:: add --no-provision after bugfix
+vagrant snapshot pop
+set ERRNO=!ERRORLEVEL!
+popd
+exit /b !ERRNO!
+::--- END OF REVERT
 
-exit /b 0
-::--- END OF RESTORE
+::--- SAVE
+:save
+echo.Attemting to save current state of honeypot...
+pushd %VM_DIR%
+vagrant snapshot push
+set ERRNO=!ERRORLEVEL!
+popd
+exit /b !ERRNO!
+::--- END OF SAVE
 
 ::--- SSH
 :ssh
