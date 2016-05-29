@@ -31,6 +31,11 @@ set MANAGEMENT_ACCOUNT_NAME=management
 set RSYNCD_HOST_PATH=%VM_DIR%\rsyncd.sh
 set RSYNCD_GUEST_SCRIPT_PATH=./rsyncd.sh
 
+set MONITORED_FOLDERS_FILE=%VM_DIR%\monitored
+set MONITORED_FOLDERS_FILE_GUEST=./monitored
+
+set MONITOR_SCRIPT_FILE_HOST=%VM_DIR%\monitor.sh
+set MONITOR_SCRIPT_FILE_GUEST=./monitor.sh
 
 echo.Honeypotter 0.1
 echo.
@@ -65,6 +70,8 @@ if "%1"=="help" (
 	call :revert %*
 ) else if "%1"=="ssh" ( 
 	call :ssh %*
+) else if "%1"=="monitor" ( 
+	call :monitor %*
 ) else (
 	set ERRORLEVEL=2
 	echo.No such command. Try '%~n0 help'.
@@ -100,6 +107,7 @@ set GUEST_APACHE_LOGS_DIR_SRC=/var/log/apache2
 set GUEST_APACHE_LOGS_DIR_DEST=%GUEST_LOGS_DIR%/apache
 set GUEST_MYSQL_LOGS_DIR_SRC=/var/log/mysql
 set GUEST_MYSQL_LOGS_DIR_DEST=%GUEST_LOGS_DIR%/mysql
+set FS_MONITOR_LOG=%GUEST_LOGS_DIR%/fs_monitor.log
 
 (
 	echo.Vagrant.configure^(2^) do ^|config^|
@@ -129,7 +137,7 @@ set GUEST_MYSQL_LOGS_DIR_DEST=%GUEST_LOGS_DIR%/mysql
 	echo.    puppet.manifests_path = "puppet"
 	echo.    puppet.manifest_file = "init.pp"
 	echo.  end
-	echo.  config.vm.provision "file", source: "%RSYNCD_HOST_PATH:\=/%", destination: "%RSYNCD_GUEST_SCRIPT_PATH%"
+	echo.  config.vm.provision "rsyncd", type: "file", source: "%RSYNCD_HOST_PATH:\=/%", destination: "%RSYNCD_GUEST_SCRIPT_PATH%"
 	echo.  config.vm.provision "run_always", type: "shell", run: "always" do ^|s^|
 	echo.    s.inline = "mkdir --parents %GUEST_LOGS_DIR%;
 	echo.                chown %MANAGEMENT_ACCOUNT_NAME%:%MANAGEMENT_ACCOUNT_NAME% %GUEST_LOGS_DIR%;
@@ -140,6 +148,16 @@ set GUEST_MYSQL_LOGS_DIR_DEST=%GUEST_LOGS_DIR%/mysql
 	echo.                mkdir --parents %GUEST_MYSQL_LOGS_DIR_DEST%;
 	echo.                %RSYNCD_GUEST_SCRIPT_PATH% %GUEST_APACHE_LOGS_DIR_SRC% %GUEST_APACHE_LOGS_DIR_DEST%;
 	echo.                %RSYNCD_GUEST_SCRIPT_PATH% %GUEST_MYSQL_LOGS_DIR_SRC% %GUEST_MYSQL_LOGS_DIR_DEST%"
+	echo.  end
+	echo.  config.vm.provision "monitor_copy", type: "file", source: "%MONITOR_SCRIPT_FILE_HOST:\=/%", destination: "%MONITOR_SCRIPT_FILE_GUEST%"
+	echo.  
+	echo.  config.vm.provision "monitored_copy", type: "file", run: "always", source: "%MONITORED_FOLDERS_FILE:\=/%", destination: "%MONITORED_FOLDERS_FILE_GUEST%"
+	echo.  config.vm.provision "monitor_run", type: "shell", run: "always" do ^|s^|
+	echo.    s.inline = "chmod u+x %MONITOR_SCRIPT_FILE_GUEST%;
+	echo.                dos2unix %MONITORED_FOLDERS_FILE_GUEST%;
+	echo.                dos2unix %MONITOR_SCRIPT_FILE_GUEST%;
+	echo.                touch %FS_MONITOR_LOG%;
+	echo.                %MONITOR_SCRIPT_FILE_GUEST% %MONITORED_FOLDERS_FILE_GUEST% %FS_MONITOR_LOG%"
 	echo.  end
 	echo.end
 ) >%VAGRANT_FILE_PATH%
@@ -175,29 +193,17 @@ set GUEST_MYSQL_LOGS_DIR_DEST=%GUEST_LOGS_DIR%/mysql
 	echo.user { 'vagrant':
 	echo.	password =^> '*'
 	echo.}
-	echo.class { 'apache':
-	echo.	default_vhost =^> false,
-	echo.	mpm_module =^> 'prefork',
-	echo.	log_level =^> 'info',
+	echo.package { 'apache2':
+	echo.	ensure =^> installed,
+	echo.	require =^> Exec['apt-update']
 	echo.}
-	echo.class {'apache::mod::php': }
-	echo.apache::vhost { '%WEBSERVER_PUBLIC_DOMAIN%':
-	echo.	ip	=^> '%PUBLIC_IP_ADDRESS%',	
-	echo.	port	=^> '80',
-	echo.	docroot	=^> '/var/www/site',
-	echo.	access_log_format =^> 'combined',
-	echo.}
-	echo.class { 'mysql::server':
-	echo.	root_password	=^> '%MYSQL_ROOT_PASSWORD%',
-	echo.	override_options =^> { 'mysqld' =^> { 
-	echo.		'general_log_file' =^> '/var/log/mysql/mysql_queries.log',
-	echo.		'general_log' =^> 1,
-	echo.		'log_output' =^> 'FILE'
-	echo.	} }
+	echo.package { 'mysql':
+	echo.	ensure =^> installed,
+	echo.	require =^> Package['apache2']
 	echo.}
 	echo.package { 'php5-mysql':
 	echo.	ensure =^> installed,
-	echo.	require =^> Class['mysql::server']
+	echo.	require =^> Package['mysql']
 	echo.}
 	echo.exec { 'mysql-restart':
 	echo.	require =^> Package['php5-mysql'],
@@ -206,7 +212,7 @@ set GUEST_MYSQL_LOGS_DIR_DEST=%GUEST_LOGS_DIR%/mysql
 ) >%PUPPET_MANIFESTS_FILE%
 
 (
-	echo.#!/bin/bash
+	echo.#^^!/bin/bash
 	echo.SRC="$1"
 	echo.DEST="$2"
 	echo.PID_FILE=$DEST/.rsyncd
@@ -225,6 +231,40 @@ set GUEST_MYSQL_LOGS_DIR_DEST=%GUEST_LOGS_DIR%/mysql
 	echo.echo $^^! ^> $PID_FILE
 	echo.sleep 1
 ) >%RSYNCD_HOST_PATH%
+
+(
+	echo.#^^!/bin/bash
+	echo.MON_PATH="$1"
+	echo.LOG_FILE="$2"
+	echo.PID_FILE=".monitor_pid"
+	echo.if [ "$#" -ne 2 ]; then
+	echo.		echo monitor wrong-num-args
+	echo.		exit 1
+	echo.fi
+	echo.if ^^! [ -r "$MON_PATH" ]; then
+	echo.		echo monitor no-monitored-list $MON_PATH
+	echo.		exit 2
+	echo.fi
+	echo.if [ -e "$PID_FILE" ]; then
+	echo.	EPID=`cat $PID_FILE`
+	echo.	if ps -p $EPID ^> /dev/null; then
+	echo.		kill -9 $EPID
+	echo.	fi
+	echo.fi
+	echo.^> .monitored
+	echo.while read path
+	echo.do
+	echo.		if [ -r "$path" ]; then
+	echo.				echo $path ^>^> .monitored
+	echo.		fi
+	echo.done ^< $MON_PATH
+	echo.touch $LOG_FILE
+	echo.nohup inotifywait -r -m --format '%%T %%e %%w %%f' --timefmt '%%Y-%%m-%%d %%H:%%M:%%S' --fromfile .monitored ^>^>$LOG_FILE ^&
+	echo.echo $^^! ^> $PID_FILE
+	echo.sleep 1
+) >%MONITOR_SCRIPT_FILE_HOST%
+    
+type NUL > %MONITORED_FOLDERS_FILE%
 
 echo.Created honeypot definition in: %VM_DIR%
 exit /b 0
@@ -360,3 +400,42 @@ exit /b 0
 if exist %VAGRANT_METADATA_DIR% exit /b 0
 exit /b 1
 ::--- END OF VM EXISTS
+
+::--- MONITOR
+:monitor
+shift
+if "%1"=="" (
+	call :help_monitor
+	exit /b 0
+)
+
+if not exist %VM_DIR% (
+	echo.Honeypot must be configured first. Moving on...
+	exit /b 1
+)
+
+echo %MONITORED_FOLDERS_FILE%
+
+type NUL > %MONITORED_FOLDERS_FILE%
+
+:_monitor_again
+if not "%~1" == "" (
+	echo.%~1 >> %MONITORED_FOLDERS_FILE%
+	shift
+	goto _monitor_again
+)
+
+pushd %VM_DIR%
+vagrant provision --provision-with monitored_copy,monitor_copy,monitor_run
+set ERRNO=!ERRORLEVEL!
+popd
+exit /b !ERRNO!
+::--- END OF MONITOR
+
+::--- HELP MONITOR
+:help_monitor
+echo.Monitor command establishes monitoring on given folders. 
+echo.Usage of "monitor" command: 
+echo.	%~n0 monitor /var/log/apache2 /var/log/mysql
+exit /b 0
+::--- END OF HELP MONITOR
