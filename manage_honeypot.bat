@@ -16,7 +16,7 @@ set PUTTY_EXE_PATH="C:\Program Files (x86)\PuTTY\putty.exe"
 setlocal EnableDelayedExpansion
 
 set ERRORLEVEL=
-set VAGRANT_BOX=ubuntu/wily64
+set VAGRANT_BOX=ubuntu/trusty64
 set ROOT_DIR=%~dp0
 set ROOT_DIR=%ROOT_DIR:~0,-1%
 set VM_DIR_NAME=honeypot_data
@@ -109,7 +109,6 @@ set GUEST_MYSQL_LOGS_DIR_DEST=%GUEST_LOGS_DIR%/mysql
 	echo.  config.vm.hostname = "%HONEYPOT_HOSTNAME%"
 	echo.  config.vm.synced_folder ".", "/vagrant", disabled: true
 	echo.  config.vm.network "private_network", ip: "%PUBLIC_IP_ADDRESS%"
-	echo.  config.vbguest.auto_update = false
 	echo.  config.vm.provider "virtualbox" do ^|vb^|
 	echo.    vb.gui = true
 	echo.    vb.memory = "1024"
@@ -254,15 +253,17 @@ exit /b 0
 
 ::--- START HONEYPOT
 :start
-pushd %VM_DIR%
+
+if not exist %VAGRANT_FILE_PATH% echo Honeypot configuration does not exist. Run '%~n0 configure' first. && exit /b 1
 
 call :_vm_exists
 if not errorlevel 1 set EXISTS=true
 
+pushd %VM_DIR%
 vagrant up
 if errorlevel 1 (
 	echo. && echo.Honeypot start failed.
-	exit /b 1
+	exit /b 2
 )
 
 if "!EXISTS!"=="true" goto _start_end
