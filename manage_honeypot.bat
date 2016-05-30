@@ -3,8 +3,6 @@
 ::--- Parameters
 
 set MANAGEMENT_ACCOUNT_PASSWORD=secret
-set MYSQL_ROOT_PASSWORD=secret
-set WEBSERVER_PUBLIC_DOMAIN=blog.example.org
 set PUBLIC_IP_ADDRESS=192.168.12.21
 set HONEYPOT_HOSTNAME=webserver
 set PUTTY_EXE_PATH="C:\Program Files (x86)\PuTTY\putty.exe"
@@ -95,6 +93,12 @@ if errorlevel 1 exit /b !ERRORLEVEL!
 mkdir %LOGS_DIR%
 if errorlevel 1 exit /b !ERRORLEVEL!
 
+:_configure_iter_args
+if not "%~1" == "" (
+	if "%~1" == "--no-services" set NOSERVICES=true
+	shift
+	goto _configure_iter_args
+)
 
 ::--- Check if VM was already created
 if exist %VAGRANT_METADATA_DIR% (
@@ -163,28 +167,18 @@ set FS_MONITOR_LOG=%GUEST_LOGS_DIR%/fs_monitor.log
 ) >%VAGRANT_FILE_PATH%
 
 (
-	echo.exec { 'apt-update':
-	echo.	command =^> '/usr/bin/apt-get update'
-	echo.}
 	echo.package { 'htop':
 	echo.	ensure =^> installed,
-	echo.	require =^> Exec['apt-update']
 	echo.}
 	echo.package { 'dos2unix':
 	echo.	ensure =^> installed,
-	echo.	require =^> Exec['apt-update']
 	echo.}
 	echo.package { 'inotify-tools':
 	echo.	ensure =^> installed,
-	echo.	require =^> Exec['apt-update']
-	echo.}
-	echo.group { '%MANAGEMENT_ACCOUNT_NAME%':
-	echo.	ensure	=^> present,
 	echo.}
 	echo.user { '%MANAGEMENT_ACCOUNT_NAME%':
-	echo.	require	=^> Group['%MANAGEMENT_ACCOUNT_NAME%'],
 	echo.	ensure	=^> present,
-	echo.	groups	=^> ['%MANAGEMENT_ACCOUNT_NAME%','sudo','vboxsf'],
+	echo.	groups	=^> ['sudo','vboxsf'],
 	echo.	shell	=^> '/bin/bash',
 	echo.	password	=^> generate^('/bin/bash', '-c', "mkpasswd -m sha-512 %MANAGEMENT_ACCOUNT_PASSWORD% | tr -d '\n'"^),
 	echo.	home	=^> '/home/%MANAGEMENT_ACCOUNT_NAME%',
@@ -193,31 +187,56 @@ set FS_MONITOR_LOG=%GUEST_LOGS_DIR%/fs_monitor.log
 	echo.user { 'vagrant':
 	echo.	password =^> '*'
 	echo.}
+	echo.exec { 'add-group':
+	echo.	require =^> User['%MANAGEMENT_ACCOUNT_NAME%'],
+	echo.	command =^> '/usr/sbin/usermod -g %MANAGEMENT_ACCOUNT_NAME% %MANAGEMENT_ACCOUNT_NAME%'
+	echo.}
+) >%PUPPET_MANIFESTS_FILE%
+
+if !NOSERVICES! == true (
+	echo.Skipping services.
+	goto _no_services
+)
+
+(
+	echo.exec { 'apt-update':
+	echo.	command =^> '/usr/bin/apt-get update'
+	echo.}
 	echo.package { 'apache2':
 	echo.	ensure =^> installed,
 	echo.	require =^> Exec['apt-update']
 	echo.}
-	echo.package { 'mysql':
+	echo.package { 'mysql-server':
 	echo.	ensure =^> installed,
 	echo.	require =^> Package['apache2']
 	echo.}
 	echo.package { 'php5-mysql':
 	echo.	ensure =^> installed,
-	echo.	require =^> Package['mysql']
+	echo.	require =^> Package['mysql-server']
 	echo.}
 	echo.exec { 'mysql-restart':
 	echo.	require =^> Package['php5-mysql'],
 	echo.	command =^> '/usr/sbin/service mysql restart'
 	echo.}
-) >%PUPPET_MANIFESTS_FILE%
+	echo.package { 'postfix':
+	echo.	ensure =^> installed,
+	echo.	require =^> Exec['apt-update']
+	echo.}
+	echo.package { 'vsftpd':
+	echo.	ensure =^> installed,
+	echo.	require =^> Exec['apt-update']
+	echo.}
+) >> %PUPPET_MANIFESTS_FILE%
+
+:_no_services
 
 (
 	echo.#^^!/bin/bash
 	echo.SRC="$1"
 	echo.DEST="$2"
 	echo.PID_FILE=$DEST/.rsyncd
-	echo.if ^^! [ -r "$SRC" ]; then echo rsyncd no-src $SRC; exit 1; fi
-	echo.if ^^! [ -w "$DEST" ]; then echo rsyncd no-dest $DEST; exit 2; fi
+	echo.if ^^! [ -r "$SRC" ]; then echo rsyncd no-src $SRC; exit 0; fi
+	echo.if ^^! [ -w "$DEST" ]; then echo rsyncd no-dest $DEST; exit 0; fi
 	echo.if [ -e "$PID_FILE" ]; then
 	echo.	EPID=`cat $PID_FILE`
 	echo.	if ps -p $EPID ^> /dev/null; then
@@ -239,11 +258,11 @@ set FS_MONITOR_LOG=%GUEST_LOGS_DIR%/fs_monitor.log
 	echo.PID_FILE=".monitor_pid"
 	echo.if [ "$#" -ne 2 ]; then
 	echo.		echo monitor wrong-num-args
-	echo.		exit 1
+	echo.		exit 0
 	echo.fi
 	echo.if ^^! [ -r "$MON_PATH" ]; then
 	echo.		echo monitor no-monitored-list $MON_PATH
-	echo.		exit 2
+	echo.		exit 0
 	echo.fi
 	echo.if [ -e "$PID_FILE" ]; then
 	echo.	EPID=`cat $PID_FILE`
@@ -274,6 +293,7 @@ exit /b 0
 :help
 echo.Available commands:
 echo.	configure	- creates a configuration of honeypot which is then used in start/stop commands.
+echo.		option: [--no-services]
 echo.
 echo.	destroy		- shuts down honeypot and deletes its configuration and VM data.
 echo.
@@ -284,6 +304,8 @@ echo.
 echo.	save	- saves current state of honeypot (uses "vagrant snapshot push").
 echo.
 echo.	revert	- restores honeypot to latest saved state (uses "vagrant snapshot pop").
+echo.
+echo.	monitor path1 [^path2^] ... - enable filesystem events monitoring for given folders on guest. 
 echo.
 echo.	ssh	- connect to virtual machine with Putty. Correct putty path in script properties is required.
 echo.
