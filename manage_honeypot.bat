@@ -1,3 +1,6 @@
+:: --- Created by Tomasz Idziak, Malgorzata Ciesla ---
+:: --- LGPL License ---
+
 @echo off
 
 ::--- Parameters
